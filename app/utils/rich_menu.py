@@ -139,7 +139,10 @@ def _resolve_rich_logo_url() -> str:
 
     Иначе, если задан WEBHOOK_URL (публичный origin нашего FastAPI) и файл
     LOGO_FILE существует, логотип отдаётся собственным эндпоинтом
-    /cabinet/branding/bot-logo.
+    /cabinet/branding/bot-logo. К URL добавляется ?v=<mtime файла> — сам
+    эндпоинт отдаёт Cache-Control: max-age=3600, и Telegram какое-то время
+    держит картинку в кеше по URL; без версии в query-string замена файла
+    логотипа на диске не долетала бы до чата, пока не истечёт этот кеш.
     """
     if _logo_unavailable:
         return ''
@@ -154,12 +157,19 @@ def _resolve_rich_logo_url() -> str:
         return explicit
 
     webhook_url = (settings.WEBHOOK_URL or '').strip()
-    if not webhook_url or not settings.LOGO_FILE or not Path(settings.LOGO_FILE).is_file():
+    if not webhook_url or not settings.LOGO_FILE:
+        return ''
+    logo_path = Path(settings.LOGO_FILE)
+    if not logo_path.is_file():
         return ''
     parsed = urlparse(webhook_url)
     if not parsed.scheme or not parsed.netloc:
         return ''
-    return f'{parsed.scheme}://{parsed.netloc}/cabinet/branding/bot-logo'
+    try:
+        version = int(logo_path.stat().st_mtime)
+    except OSError:
+        version = 0
+    return f'{parsed.scheme}://{parsed.netloc}/cabinet/branding/bot-logo?v={version}'
 
 
 def _is_media_fetch_error(error: Exception) -> bool:

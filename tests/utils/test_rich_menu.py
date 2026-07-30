@@ -1,5 +1,6 @@
 """Тесты rich-меню (Bot API 10.1): билдер HTML, delivery-хелперы, fallback-флаг."""
 
+import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -865,11 +866,33 @@ async def test_logo_auto_url_from_webhook(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, 'WEBHOOK_URL', 'https://bot.example.com/webhook', raising=False)
     monkeypatch.setattr(settings, 'LOGO_FILE', str(logo), raising=False)
 
-    assert rich_menu._resolve_rich_logo_url() == 'https://bot.example.com/cabinet/branding/bot-logo'
+    expected_version = int(logo.stat().st_mtime)
+    assert (
+        rich_menu._resolve_rich_logo_url()
+        == f'https://bot.example.com/cabinet/branding/bot-logo?v={expected_version}'
+    )
 
     # Файла нет — логотип не подставляется
     monkeypatch.setattr(settings, 'LOGO_FILE', str(tmp_path / 'missing.png'), raising=False)
     assert rich_menu._resolve_rich_logo_url() == ''
+
+
+async def test_logo_auto_url_version_changes_when_file_replaced(monkeypatch, tmp_path):
+    """Замена файла логотипа должна менять URL — иначе Telegram отдаёт старую картинку из кеша."""
+    logo = tmp_path / 'logo.png'
+    logo.write_bytes(b'png-v1')
+    monkeypatch.setattr(settings, 'MAIN_MENU_RICH_LOGO_URL', '', raising=False)
+    monkeypatch.setattr(settings, 'WEBHOOK_URL', 'https://bot.example.com/webhook', raising=False)
+    monkeypatch.setattr(settings, 'LOGO_FILE', str(logo), raising=False)
+
+    first_url = rich_menu._resolve_rich_logo_url()
+
+    os.utime(logo, (logo.stat().st_atime, logo.stat().st_mtime + 5))
+
+    second_url = rich_menu._resolve_rich_logo_url()
+
+    assert first_url != second_url
+    assert second_url.startswith('https://bot.example.com/cabinet/branding/bot-logo?v=')
 
 
 async def test_logo_fetch_failure_degrades_and_resends(monkeypatch):
