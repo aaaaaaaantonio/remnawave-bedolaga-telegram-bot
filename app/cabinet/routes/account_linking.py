@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cabinet.auth.email_auth_gate import is_email_auth_enabled
 from app.config import settings
 from app.database.crud.system_setting import get_setting_value
 from app.database.crud.user import (
@@ -45,6 +46,7 @@ from ..auth.merge_service import (
 from ..auth.oauth_providers import (
     generate_oauth_state,
     get_provider,
+    resolve_oauth_redirect_uri,
     validate_oauth_state,
 )
 from ..auth.telegram_auth import (
@@ -81,10 +83,10 @@ class OAuthStateData(TypedDict):
     code_verifier: NotRequired[str]  # PKCE code verifier (VK)
 
 
-def _get_active_providers() -> list[str]:
-    """Вернуть список активных провайдеров аутентификации (только включённые)."""
+async def _get_active_providers(db: AsyncSession) -> list[str]:
+    """Активные способы входа: email — по тому же переключателю, что UI и роуты."""
     providers: list[str] = ['telegram']
-    if settings.is_cabinet_email_auth_enabled():
+    if await is_email_auth_enabled(db):
         providers.append('email')
     providers.extend(settings.get_enabled_oauth_provider_names())
     return providers
@@ -237,7 +239,9 @@ async def _exchange_and_link_oauth(
 
     Used by both link_provider_callback (JWT-authed) and link_server_complete (state-authed).
     """
-    oauth_provider = get_provider(provider)
+    # Тот же redirect_uri, что был выбран на init: провайдер сверяет их на
+    # обмене кода, а разошедшиеся значения дают invalid_grant.
+    oauth_provider = get_provider(provider, redirect_uri=state_data.get('oauth_redirect_uri'))
     if not oauth_provider:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -373,10 +377,11 @@ router = APIRouter(prefix='/auth/account', tags=['Cabinet Account Linking'])
 @router.get('/linked-providers', response_model=LinkedProvidersResponse)
 async def get_linked_providers(
     user: User = Depends(get_current_cabinet_user),
+    db: AsyncSession = Depends(get_cabinet_db),
 ) -> LinkedProvidersResponse:
     """Return all auth methods with their link status for the current user."""
     providers: list[LinkedProvider] = []
-    for provider in _get_active_providers():
+    for provider in await _get_active_providers(db):
         identifier = _get_provider_identifier(user, provider)
         providers.append(
             LinkedProvider(
@@ -391,6 +396,7 @@ async def get_linked_providers(
 @router.get('/link/{provider}/init', response_model=LinkInitResponse)
 async def link_provider_init(
     provider: OAuthProviderName,
+    http_request: Request,
     user: User = Depends(get_current_cabinet_user),
 ) -> LinkInitResponse:
     """Start OAuth flow for linking a new provider to the current account."""
@@ -403,7 +409,11 @@ async def link_provider_init(
             detail='Provider is already linked to your account',
         )
 
-    oauth_provider = get_provider(provider)
+    # Привязка уходит на тот же домен, с которого пришёл запрос, — иначе
+    # пользователь с зеркала возвращается на канонический и привязка срывается
+    # (та же причина, что и у логина в routes/oauth.py).
+    redirect_uri = resolve_oauth_redirect_uri(http_request.headers.get('origin'))
+    oauth_provider = get_provider(provider, redirect_uri=redirect_uri)
     if not oauth_provider:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -415,6 +425,7 @@ async def link_provider_init(
     extra_data: dict[str, str] = {
         'linking': 'true',
         'user_id': str(user.id),
+        'oauth_redirect_uri': redirect_uri,
     }
     if auth_extra:
         extra_data.update(auth_extra)

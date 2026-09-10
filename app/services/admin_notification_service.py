@@ -33,6 +33,7 @@ from app.database.models import (
     Transaction,
     User,
 )
+from app.utils.formatters import format_username_link
 from app.utils.message_patch import caption_exceeds_telegram_limit
 from app.utils.rich_admin import classic_admin_html_to_rich, try_send_rich_admin_message
 from app.utils.timezone import format_local_datetime
@@ -138,7 +139,7 @@ class AdminNotificationService:
                 return f'ID {referred_by_id} (не найден)'
 
             if referrer.username:
-                return f'@{html.escape(referrer.username)} (ID: {referred_by_id})'
+                return f'{format_username_link(referrer.username)} (ID: {referred_by_id})'
             if referrer.telegram_id:
                 return f'ID {referrer.telegram_id}'
             if referrer.email:
@@ -353,9 +354,11 @@ class AdminNotificationService:
         if campaign.is_subscription_bonus:
             default_devices = getattr(settings, 'DEFAULT_DEVICE_LIMIT', 1)
             details = [
-                f'📅 {campaign.subscription_duration_days or 0} дн. '
-                f'• 📊 {campaign.subscription_traffic_gb or 0} ГБ '
-                f'• 📱 {campaign.subscription_device_limit or default_devices} устр.',
+                (
+                    f'📅 {campaign.subscription_duration_days or 0} дн. '
+                    f'• 📊 {campaign.subscription_traffic_gb or 0} ГБ '
+                    f'• 📱 {campaign.subscription_device_limit or default_devices} устр.'
+                ),
             ]
             if campaign.subscription_squads:
                 details.append(f'🌐 Сквады: {len(campaign.subscription_squads)} шт.')
@@ -437,7 +440,7 @@ class AdminNotificationService:
                 '',
                 f'👤 <b>Пользователь:</b> {user_display}',
                 f'🆔 <b>{user_id_label}:</b> {user_id_display}',
-                f'📱 <b>Username:</b> @{html.escape(getattr(user, "username", None) or "отсутствует")}',
+                f'📱 <b>Username:</b> {format_username_link(getattr(user, "username", None), "отсутствует")}',
                 f'👥 <b>Статус:</b> {user_status}',
                 '',
             ]
@@ -586,7 +589,7 @@ class AdminNotificationService:
             # Добавляем username только если есть
             username = getattr(user, 'username', None)
             if username:
-                message_lines.append(f'📱 @{html.escape(username)}')
+                message_lines.append(f'📱 {format_username_link(username)}')
 
             message_lines.append(f'📋 {user_status}')
 
@@ -749,7 +752,7 @@ class AdminNotificationService:
 
         username = getattr(user, 'username', None)
         if username:
-            message_lines.append(f'📱 @{html.escape(username)}')
+            message_lines.append(f'📱 {format_username_link(username)}')
 
         message_lines.append(f'💳 {topup_status}')
 
@@ -764,8 +767,10 @@ class AdminNotificationService:
             [
                 f'💵 <b>{settings.format_price(transaction.amount_kopeks)}</b> | {payment_method}',
                 '',
-                f'📉 {settings.format_price(old_balance)} → 📈 {settings.format_price(user.balance_kopeks)}'
-                f' (<b>+{settings.format_price(balance_change)}</b>)',
+                (
+                    f'📉 {settings.format_price(old_balance)} → 📈 {settings.format_price(user.balance_kopeks)}'
+                    f' (<b>+{settings.format_price(balance_change)}</b>)'
+                ),
             ]
         )
 
@@ -1008,7 +1013,7 @@ class AdminNotificationService:
 
 👤 <b>Пользователь:</b> {user_display}
 🆔 <b>{user_id_label}:</b> {user_id_display}
-📱 <b>Username:</b> @{html.escape(getattr(user, 'username', None) or 'отсутствует')}
+📱 <b>Username:</b> {format_username_link(getattr(user, 'username', None), 'отсутствует')}
 
 {promo_block}
 
@@ -1095,7 +1100,7 @@ class AdminNotificationService:
                 '',
                 f'👤 <b>Пользователь:</b> {user_display}',
                 f'🆔 <b>{user_id_label}:</b> {user_id_display}',
-                f'📱 <b>Username:</b> @{html.escape(getattr(user, "username", None) or "отсутствует")}',
+                f'📱 <b>Username:</b> {format_username_link(getattr(user, "username", None), "отсутствует")}',
                 '',
                 promo_block,
                 '',
@@ -1220,7 +1225,7 @@ class AdminNotificationService:
             ]
 
             if telegram_user.username:
-                message_lines.append(f'📱 @{html.escape(telegram_user.username)}')
+                message_lines.append(f'📱 {format_username_link(telegram_user.username)}')
 
             message_lines.append(f'📋 {user_status}')
 
@@ -1320,7 +1325,7 @@ class AdminNotificationService:
                 f'👤 {html.escape(telegram_user_name)} (<code>{telegram_user_id}</code>)',
             ]
             if telegram_username:
-                message_lines.append(f'📱 @{html.escape(telegram_username)}')
+                message_lines.append(f'📱 {format_username_link(telegram_username)}')
 
             promo_group = await self._get_user_promo_group(db, user)
             if promo_group:
@@ -1409,7 +1414,7 @@ class AdminNotificationService:
                 '',
                 f'👤 <b>Пользователь:</b> {user_display}',
                 f'🆔 <b>{user_id_label}:</b> {user_id_display}',
-                f'📱 <b>Username:</b> @{html.escape(getattr(user, "username", None) or "отсутствует")}',
+                f'📱 <b>Username:</b> {format_username_link(getattr(user, "username", None), "отсутствует")}',
                 '',
                 self._format_promo_group_block(new_group, title='Новая промогруппа', icon='🏆'),
             ]
@@ -1496,8 +1501,7 @@ class AdminNotificationService:
         *,
         category: NotificationCategory | None = None,
     ) -> bool:
-        if not self.chat_id:
-            logger.warning('ADMIN_NOTIFICATIONS_CHAT_ID не настроен')
+        if not self._is_enabled():
             return False
 
         # Per-category suppression
@@ -1659,8 +1663,12 @@ class AdminNotificationService:
                 # Cabinet gift: show buyer with link to user profile
                 buyer = getattr(purchase, 'buyer', None)
                 if buyer:
-                    buyer_name = f'@{buyer.username}' if buyer.username else buyer.email or f'id:{buyer.id}'
-                    message_lines.append(f'👤 Покупатель: <code>{html.escape(buyer_name)}</code>')
+                    if buyer.username:
+                        buyer_display = format_username_link(buyer.username)
+                    else:
+                        buyer_name = buyer.email or f'id:{buyer.id}'
+                        buyer_display = f'<code>{html.escape(buyer_name)}</code>'
+                    message_lines.append(f'👤 Покупатель: {buyer_display}')
                 else:
                     message_lines.append(f'{contact_icon} Покупатель: <code>{contact_display}</code>')
             else:
@@ -1740,6 +1748,8 @@ class AdminNotificationService:
             'freekassa': f'💳 {settings.get_freekassa_display_name()}',
             'kassa_ai': f'💳 {settings.get_kassa_ai_display_name()}',
             'cispay': f'💳 {settings.get_cispay_display_name()}',
+            'tabpay': f'💳 {settings.get_tabpay_display_name()}',
+            'paritypay': f'💳 {settings.get_paritypay_display_name()}',
             'manual': '🛠️ Вручную (админ)',
             'balance': '💰 С баланса',
         }
@@ -2036,7 +2046,7 @@ class AdminNotificationService:
             # Добавляем username только если есть
             username = getattr(user, 'username', None)
             if username:
-                message_lines.append(f'📱 @{html.escape(username)}')
+                message_lines.append(f'📱 {format_username_link(username)}')
 
             # Тариф (если есть)
             if tariff_name:
@@ -2142,7 +2152,7 @@ class AdminNotificationService:
 
             username = getattr(user, 'username', None)
             if username:
-                message_lines.append(f'📱 @{html.escape(username)}')
+                message_lines.append(f'📱 {format_username_link(username)}')
 
             message_lines.append('')
 
@@ -2197,7 +2207,7 @@ class AdminNotificationService:
 
             username = getattr(user, 'username', None)
             if username:
-                message_lines.append(f'📱 @{html.escape(username)}')
+                message_lines.append(f'📱 {format_username_link(username)}')
 
             message_lines.extend(
                 [
@@ -2358,8 +2368,7 @@ class AdminNotificationService:
             bot: экземпляр бота для отправки сообщения
             topic_id: ID топика для отправки уведомления (если не указан, использует стандартный)
         """
-        if not self.chat_id:
-            logger.warning('ADMIN_NOTIFICATIONS_CHAT_ID не настроен')
+        if not self._is_enabled() or not self.category_enabled.get(NotificationCategory.INFRASTRUCTURE, True):
             return False
 
         # Используем специальный топик для подозрительной активности, если он задан
