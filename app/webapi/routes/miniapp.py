@@ -104,6 +104,7 @@ from app.utils.pricing_utils import (
     format_period_description,
 )
 from app.utils.promo_offer import get_user_active_promo_discount_percent
+from app.utils.subscription_time import days_left_rounded_up
 from app.utils.subscription_utils import get_happ_cryptolink_redirect_link
 from app.utils.telegram_webapp import (
     TelegramWebAppAuthError,
@@ -3546,8 +3547,7 @@ async def get_subscription_details(
         purchases = purchases_result.scalars().all()
 
         for purchase in purchases:
-            time_remaining = purchase.expires_at - now
-            days_remaining = max(0, int(time_remaining.total_seconds() / 86400))
+            days_remaining = days_left_rounded_up(purchase.expires_at, now)
             total_duration_seconds = (purchase.expires_at - purchase.created_at).total_seconds()
             elapsed_seconds = (now - purchase.created_at).total_seconds()
             progress_percent = min(
@@ -7093,6 +7093,10 @@ async def switch_tariff_endpoint(
 
     user = await lock_user_for_pricing(db, user.id)
 
+    # Оверлей грейса, осевший в подписке (v4.10–4.11), — не её срок: вернуть до расчёта.
+    from app.services.grace_access_echo import undo_grace_overlay_echo
+
+    await undo_grace_overlay_echo(db, subscription)
     remaining_days = remaining_days_for_switch(subscription.end_date)
 
     # Рассчитываем стоимость (PricingEngine обрабатывает все случаи)
@@ -7554,6 +7558,7 @@ async def toggle_daily_subscription_pause_endpoint(
         SubscriptionStatus.EXPIRED.value,
         SubscriptionStatus.LIMITED.value,
     )
+    was_limited = subscription.status == SubscriptionStatus.LIMITED.value
 
     # System-DISABLED subs (is_daily_paused=False) должны идти по пути resume
     if was_disabled and not is_currently_paused:
@@ -7679,7 +7684,7 @@ async def toggle_daily_subscription_pause_endpoint(
         # Sync with RemnaWave
         # Возобновление списывает суточную оплату — обнуление счётчика решает
         # общая политика суточного списания, а не жёсткая константа.
-        from app.services.traffic_reset_policy import should_reset_traffic_on_daily_charge
+        from app.services.traffic_reset_policy import lift_panel_traffic_limit, should_reset_traffic_on_daily_charge
 
         reset_traffic = should_reset_traffic_on_daily_charge(tariff)
         reset_reason = 'суточное списание (возобновление)' if reset_traffic else None
@@ -7736,6 +7741,9 @@ async def toggle_daily_subscription_pause_endpoint(
                 # мониторинга он показывал бы исчерпанный трафик.
                 subscription.traffic_used_gb = 0.0
                 await db.commit()
+                if was_limited:
+                    # PATCH сам по себе статус «трафик исчерпан» не снимает.
+                    await lift_panel_traffic_limit(db, subscription, service=service)
         except Exception as e:
             logger.error('Ошибка синхронизации с RemnaWave при возобновлении', error=e)
             from app.services.remnawave_retry_queue import remnawave_retry_queue
